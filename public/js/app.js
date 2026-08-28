@@ -13,40 +13,26 @@ const App = {
   // ── Init ──
   async init() {
     this.el = document.getElementById('app');
-    const savedUser = localStorage.getItem('pv_user');
-    if (savedUser) {
-      try { this.currentUser = JSON.parse(savedUser); } catch(e) { localStorage.removeItem('pv_user'); }
-    }
-    
-    if (this.currentUser) {
-      try {
-        const user = await API.getMe();
-        if (user && user.csrfToken) {
-          localStorage.setItem('pv_csrf_token', user.csrfToken);
-          this.currentUser = user;
-          localStorage.setItem('pv_user', JSON.stringify(user));
-        } else {
-          localStorage.removeItem('pv_user');
-          localStorage.removeItem('pv_csrf_token');
-          this.currentUser = null;
-        }
-      } catch (e) {
-        localStorage.removeItem('pv_user');
-        localStorage.removeItem('pv_csrf_token');
-        this.currentUser = null;
-      }
-    }
-    
+
+    // Who the person is comes from the edge, so it is asked for once, here,
+    // and never cached in this browser. A cached identity could outlive the
+    // session that produced it, which is exactly the kind of second, weaker
+    // login this library no longer has.
     try {
-      this.publicConfig = await API.getPublicConfig();
-    } catch(e) { this.publicConfig = {}; }
-    
-    if (this.publicConfig.require_login_to_view && !this.currentUser) {
-      document.getElementById('app').innerHTML = '<div style="height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;background:var(--bg-color)"><h1 style="margin-bottom:20px">GyroidVault</h1><button class="btn btn-primary btn-lg" onclick="App.showLogin()">Login to Access GyroidVault</button></div>';
-      this.showLogin();
+      this.currentUser = await API.getMe();
+    } catch (e) {
+      this.currentUser = null;
+    }
+
+    if (!this.currentUser) {
+      document.getElementById('app').innerHTML =
+        '<div style="height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px">' +
+        '<h1>Session ended</h1>' +
+        '<p style="color:var(--text-muted)">Reload the page to sign in again.</p>' +
+        '<button class="btn btn-primary" onclick="window.location.reload()">Reload</button></div>';
       return;
     }
-    
+
     window.addEventListener('hashchange', () => this.route());
     await this.loadCache();
     await this.loadViewMode();
@@ -271,10 +257,6 @@ const App = {
       }
       document.getElementById('nav-settings')?.classList.add('active');
       this.renderSettings();
-    } else if (path === '/register') {
-      this.showRegister(params.get('token') || params.get('invite'));
-    } else if (path === '/reset-password') {
-      this.showResetPassword(params.get('token'));
     } else {
       this.renderDashboard();
     }
@@ -906,161 +888,33 @@ const App = {
   },
 
   // ── Auth ──
-  showLogin() { 
-    const allowReg = this.publicConfig && this.publicConfig.open_registration;
-    this.openModal('Login', UI.loginForm(allowReg)); 
-  },
-  showRegister(token = '') { this.openModal('Register', UI.registerForm(token)); },
-  showForgotPassword() { this.openModal('Reset Password', UI.forgotPasswordForm()); },
-  showResetPassword(token) { if (token) this.openModal('Choose New Password', UI.resetPasswordForm(token)); },
   
-  async handleLogin(e) {
-    e.preventDefault();
-    const fd = new FormData(e.target);
-    try {
-      const res = await API.login(fd.get('username'), fd.get('password'));
-      if (!res || !res.csrfToken) {
-        this.toast('Invalid username or password', 'error');
-        return;
-      }
-      if (res.error) throw new Error(res.error);
-      localStorage.setItem('pv_csrf_token', res.csrfToken);
-      localStorage.setItem('pv_user', JSON.stringify(res.user));
-      this.currentUser = res.user;
-      this.toast('Welcome back, ' + res.user.username);
-      this.closeModal();
-      this.updateUserNav();
-      await this.loadCache();
-      this.route();
-    } catch(e) { this.toast(e.message, 'error'); }
-  },
   
-  async handleRegister(e) {
-    e.preventDefault();
-    const fd = new FormData(e.target);
-    try {
-      await API.register(fd.get('username'), fd.get('email'), fd.get('password'), fd.get('token'));
-      this.toast('Registration successful! Please login.');
-      this.showLogin();
-    } catch(e) { this.toast(e.message, 'error'); }
-  },
-
-  async handleInviteUser(e) {
-    e.preventDefault();
-    const btn = e.target.querySelector('button');
-    if (btn) { btn.disabled = true; btn.textContent = 'Sending...'; }
-    const fd = new FormData(e.target);
-    try {
-      await API.inviteUser(fd.get('email'));
-      this.toast('Invitation sent successfully', 'success');
-      e.target.reset();
-    } catch(err) {
-      this.toast(err.message, 'error');
-    } finally {
-      if (btn) { btn.disabled = false; btn.textContent = 'Send Invite'; }
-    }
-  },
-
-  async changeUserRole(userId, selectElem) {
-    try {
-      const newRole = selectElem.value;
-      await API.updateUserRole(userId, newRole);
-      this.toast('User role updated successfully', 'success');
-      // trigger refresh of settings tab
-      const usersBtn = document.querySelector('.tab-btn[data-tab="users"]');
-      if (usersBtn) usersBtn.click();
-    } catch (err) {
-      this.toast(err.message, 'error');
-      // Revert select on error
-      const usersBtn = document.querySelector('.tab-btn[data-tab="users"]');
-      if (usersBtn) usersBtn.click();
-    }
-  },
-
-  async deleteUser(userId) {
-    if (!confirm('Are you sure you want to delete this user? This action cannot be undone.')) return;
-    try {
-      await API.deleteUser(userId);
-      this.toast('User deleted successfully', 'success');
-      // trigger refresh of settings tab
-      const usersBtn = document.querySelector('.tab-btn[data-tab="users"]');
-      if (usersBtn) usersBtn.click();
-    } catch (err) {
-      this.toast(err.message, 'error');
-    }
-  },
 
 
-  async handleForgotPassword(e) {
-    e.preventDefault();
-    const fd = new FormData(e.target);
-    try {
-      const res = await API.forgotPassword(fd.get('email'));
-      this.toast(res.message);
-      this.closeModal();
-    } catch(e) { this.toast(e.message, 'error'); }
-  },
 
-  async handleResetPassword(e) {
-    e.preventDefault();
-    const fd = new FormData(e.target);
-    if (fd.get('password') !== fd.get('confirm')) return this.toast('Passwords do not match', 'error');
-    try {
-      const res = await API.resetPassword(fd.get('token'), fd.get('password'));
-      this.toast(res.message);
-      this.closeModal();
-      window.location.hash = '#/';
-      this.showLogin();
-    } catch(e) { this.toast(e.message, 'error'); }
-  },
+
+
+
   
   async handleUpdateProfile(e) {
     e.preventDefault();
     const fd = new FormData(e.target);
-    const data = { username: fd.get('username'), email: fd.get('email') };
-    if (fd.get('password')) data.password = fd.get('password');
-    if (fd.has('preferred_slicer')) data.preferred_slicer = fd.get('preferred_slicer');
+    // The preferred slicer is the only part of a profile this application owns.
     try {
-      await API.updateProfile(data);
-      this.toast('Profile updated successfully');
-      // Refresh user info
-      const user = await API.getMe();
-      this.currentUser = user;
-      localStorage.setItem('pv_user', JSON.stringify(user));
+      await API.updateProfile({ preferred_slicer: fd.get('preferred_slicer') || '' });
+      this.toast('Preferences saved');
+      this.currentUser = await API.getMe();
       this.updateUserNav();
     } catch(e) { this.toast(e.message, 'error'); }
   },
 
-  async generateApiKey() {
-    try {
-      const res = await API.generateApiKey();
-      if (res.api_key) {
-        const resultDiv = document.getElementById('api-key-result');
-        if (resultDiv) {
-          resultDiv.textContent = res.api_key;
-          resultDiv.style.display = 'block';
-          this.toast('API Key generated successfully', 'success');
-        }
-      }
-    } catch(e) { this.toast(e.message || 'Failed to generate API key', 'error'); }
-  },
 
-  async handleSaveSMTP(e) {
-    e.preventDefault();
-    const fd = new FormData(e.target);
-    const data = Object.fromEntries(fd.entries());
-    try {
-      await API.saveSMTPSettings(data);
-      this.toast('SMTP settings saved');
-    } catch(e) { this.toast(e.message, 'error'); }
-  },
   
   async handleSaveSystemSettings(e) {
     e.preventDefault();
     const fd = new FormData(e.target);
     const data = Object.fromEntries(fd.entries());
-    data.open_registration = fd.has('open_registration') ? 'true' : 'false';
-    data.require_login_to_view = fd.has('require_login_to_view') ? 'true' : 'false';
     try {
       await API.saveSystemSettings(data);
       await this.loadViewMode(); // refresh the cached view mode
@@ -1102,75 +956,25 @@ const App = {
     } catch(err) { this.toast(err.message, 'error'); }
   },
   
-  async testSMTP(e) {
-    if (e) e.preventDefault();
-    const btn = e?.target;
-    
-    // First, save current settings so we test what is on screen
-    const form = btn.closest('form');
-    if (form) {
-      try {
-        const fd = new FormData(form);
-        const data = Object.fromEntries(fd.entries());
-        await API.saveSMTPSettings(data);
-      } catch(e) { 
-        return this.toast('Failed to save settings before test: ' + e.message, 'error'); 
-      }
-    }
-    
-    this.openModal('Test SMTP Connection', UI.smtpTestModal(this.currentUser?.email || ""));
-  },
 
-  async handleSendTestEmail(e) {
-    e.preventDefault();
-    const fd = new FormData(e.target);
-    const email = fd.get('test_email');
-    const btn = document.getElementById('send-test-btn');
-
-    if (btn) { btn.disabled = true; btn.textContent = 'Sending...'; }
-    try {
-      await API.testSMTP({ email });
-      this.toast('Test email sent successfully! Check your inbox.', 'success');
-      this.closeModal();
-    } catch(e) { 
-      this.toast(e.message, 'error'); 
-      if (btn) { btn.disabled = false; btn.textContent = 'Send Test'; }
-    }
-  },
   
-  async handleLogout() {
-    try { await API.logout(); } catch(e) {}
-    localStorage.removeItem('pv_csrf_token');
-    localStorage.removeItem('pv_user');
-    this.currentUser = null;
-    this.toast('Logged out');
-    this.updateUserNav();
-    this.route();
-  },
   
   updateUserNav() {
     const wrapper = document.getElementById('nav-login-wrapper');
-    if (!wrapper) return;
-    if (this.currentUser) {
-      wrapper.innerHTML = `
-        <div class="dropdown">
-          <button class="btn btn-ghost" style="display:flex;align-items:center;gap:8px;padding:8px 12px">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
-            <span>${this.currentUser.username}</span>
-          </button>
-          <div class="dropdown-content" style="right: 0">
-            <div class="dropdown-header">${this.currentUser.role.toUpperCase()} ACCOUNT</div>
-            <a href="#/profile">Edit Profile</a>
-            <a href="#" onclick="event.preventDefault();App.handleLogout()">Log Out</a>
-          </div>
-        </div>`;
-    } else {
-      wrapper.innerHTML = `
-        <button class="btn btn-ghost" onclick="App.showLogin()" style="display:flex;align-items:center;gap:8px">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3" y2="12"/></svg>
-          <span>Login</span>
-        </button>`;
-    }
+    if (!wrapper || !this.currentUser) return;
+    const logout = this.currentUser.logout_url;
+    wrapper.innerHTML = `
+      <div class="dropdown">
+        <button class="btn btn-ghost" style="display:flex;align-items:center;gap:8px;padding:8px 12px">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+          <span>${this.currentUser.username}</span>
+        </button>
+        <div class="dropdown-content" style="right: 0">
+          <div class="dropdown-header">${this.currentUser.role.toUpperCase()} ACCOUNT</div>
+          <a href="#/profile">Preferences</a>
+          ${logout ? `<a href="${logout}">Sign out of ${this.currentUser.identity_provider || 'OpenPrintHQ'}</a>` : ''}
+        </div>
+      </div>`;
   },
 
   async renderProfile() {
@@ -1183,7 +987,6 @@ const App = {
       <div class="settings-tabs" style="display:flex;gap:8px;margin-bottom:24px;border-bottom:1px solid var(--border);padding-bottom:1px">
         <button class="tab-btn active" data-tab="account" style="background:none;border:none;color:var(--text-secondary);padding:10px 20px;cursor:pointer;font-weight:600;border-bottom:2px solid transparent;transition:all .2s">Account Details</button>
         <button class="tab-btn" data-tab="appearance" style="background:none;border:none;color:var(--text-secondary);padding:10px 20px;cursor:pointer;font-weight:600;border-bottom:2px solid transparent;transition:all .2s">Local Appearance</button>
-        <button class="tab-btn" data-tab="api" style="background:none;border:none;color:var(--text-secondary);padding:10px 20px;cursor:pointer;font-weight:600;border-bottom:2px solid transparent;transition:all .2s">API & Integrations</button>
       </div>
       <div id="profile-content"></div>`;
 
@@ -1205,17 +1008,9 @@ const App = {
             <div class="panel-body">
               <form onsubmit="App.handleUpdateProfile(event)" class="form-grid">
                 <div class="form-group">
-                  <label class="form-label">Username</label>
-                  <input type="text" name="username" value="${user.username}" required class="form-input">
-                </div>
-                <div class="form-group">
-                  <label class="form-label">Email Address</label>
-                  <input type="email" name="email" value="${user.email || ''}" required class="form-input">
-                </div>
-                <div class="form-group">
-                  <label class="form-label">New Password</label>
-                  <input type="password" name="password" placeholder="Leave blank to keep current" class="form-input">
-                  <p style="font-size: 0.75rem; color: var(--text-muted); margin-top: 6px;">Must be at least 8 characters and contain letters and numbers.</p>
+                  <label class="form-label">Signed in as</label>
+                  <input type="text" value="${user.username}${user.email ? ' (' + user.email + ')' : ''}" class="form-input" disabled>
+                  <p style="font-size: 0.75rem; color: var(--text-muted); margin-top: 6px;">Your name, address and access level come from ${user.identity_provider || 'OpenPrintHQ'} and are changed there.</p>
                 </div>
                 <div class="form-group">
                   <label class="form-label">Preferred Slicer</label>
@@ -1261,22 +1056,6 @@ const App = {
             </div>
           </div>
         `;
-      } else if (tab === 'api') {
-        content.innerHTML = `
-          <div class="glass-panel">
-            <div class="panel-header"><div class="panel-title">API & Integrations</div></div>
-            <div class="panel-body">
-              <div class="form-group" style="margin-bottom:0">
-                <p style="font-size: 0.9rem; color: var(--text-muted); margin-bottom: 20px; line-height: 1.5;">Generate an API key to allow external tools (like OrcaSlicer post-processing scripts) to securely interact with your GyroidVault account. Keep this key secret.</p>
-                <div id="api-key-result" style="display:none; margin-bottom:15px; background:rgba(16,185,129,0.1); padding:12px; border-radius:var(--radius-sm); border:1px solid var(--success); color:var(--success); word-break:break-all; font-family:monospace; font-size:0.85rem"></div>
-                <button type="button" class="btn btn-secondary" onclick="App.generateApiKey()">
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right:6px"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"></path></svg>
-                  Generate New API Key
-                </button>
-              </div>
-            </div>
-          </div>
-        `;
       }
     };
 
@@ -1291,10 +1070,6 @@ const App = {
 
   // ─── Collections ────────────────────────────────────────────────────────
   async renderProjects() {
-    if (!this.currentUser) {
-      this.el.innerHTML = '<div class="empty-state"><div class="empty-state-icon">🔐</div><div class="empty-state-text">Login to view collections</div><div class="empty-state-sub">Collections are private and require an account</div><button class="btn btn-primary btn-sm" onclick="App.showLogin()" style="margin-top:16px">Login</button></div>';
-      return;
-    }
     this.el.innerHTML = '<div class="skeleton-grid"></div>';
     try {
       const projects = await API.getProjects();
@@ -1613,12 +1388,11 @@ const App = {
     btn.innerHTML = '<span class="btn-icon rotating">🔄</span> Scanning...';
 
     try {
-      const csrfToken = localStorage.getItem('pv_csrf_token');
+      // No CSRF token: the edge authenticates this request.
       const res = await fetch('/api/library/scan', { 
         method: 'POST',
-        credentials: 'same-origin',
-        headers: { 'X-CSRF-Token': csrfToken }
-      });
+        credentials: 'same-origin'
+        });
       const data = await res.json();
       if (res.ok) {
         this.toast(`Scan complete! Added ${data.modelsAdded} models and ${data.filesAdded} files.`);
@@ -1705,10 +1479,8 @@ const App = {
         <button class="tab-btn" data-tab="tags" style="background:none;border:none;color:var(--text-secondary);padding:10px 20px;cursor:pointer;font-weight:600;border-bottom:2px solid transparent;transition:all .2s">Tags</button>
         <button class="tab-btn" data-tab="materials" style="background:none;border:none;color:var(--text-secondary);padding:10px 20px;cursor:pointer;font-weight:600;border-bottom:2px solid transparent;transition:all .2s">Materials</button>
         ${this.currentUser?.role === 'admin' ? '<button class="tab-btn" data-tab="printers" style="background:none;border:none;color:var(--text-secondary);padding:10px 20px;cursor:pointer;font-weight:600;border-bottom:2px solid transparent;transition:all .2s">Printers</button>' : ''}
-        ${this.currentUser?.role === 'admin' ? '<button class="tab-btn" data-tab="security" style="background:none;border:none;color:var(--text-secondary);padding:10px 20px;cursor:pointer;font-weight:600;border-bottom:2px solid transparent;transition:all .2s">Security</button>' : ''}
         ${this.currentUser?.role === 'admin' ? '<button class="tab-btn" data-tab="maintenance" style="background:none;border:none;color:var(--text-secondary);padding:10px 20px;cursor:pointer;font-weight:600;border-bottom:2px solid transparent;transition:all .2s">Maintenance</button>' : ''}
         ${this.currentUser?.role === 'admin' ? '<button class="tab-btn" data-tab="system" style="background:none;border:none;color:var(--text-secondary);padding:10px 20px;cursor:pointer;font-weight:600;border-bottom:2px solid transparent;transition:all .2s">System</button>' : ''}
-        ${this.currentUser?.role === 'admin' ? '<button class="tab-btn" data-tab="smtp" style="background:none;border:none;color:var(--text-secondary);padding:10px 20px;cursor:pointer;font-weight:600;border-bottom:2px solid transparent;transition:all .2s">SMTP & Mail</button>' : ''}
         ${this.currentUser?.role === 'admin' ? '<button class="tab-btn" data-tab="users" style="background:none;border:none;color:var(--text-secondary);padding:10px 20px;cursor:pointer;font-weight:600;border-bottom:2px solid transparent;transition:all .2s">Users</button>' : ''}
         <button class="tab-btn" data-tab="about" style="background:none;border:none;color:var(--text-secondary);padding:10px 20px;cursor:pointer;font-weight:600;border-bottom:2px solid transparent;transition:all .2s">About</button>
       </div>
@@ -1744,14 +1516,6 @@ const App = {
               <div class="panel-header"><div class="panel-title">🖨️ 3D Printers (Moonraker)</div></div>
               <div class="panel-body">${UI.printersSettingsForm(printers)}</div>
             </div>`;
-        } else if (tab === 'security') {
-          const config = await API.getSystemSettings();
-          content.innerHTML = `
-            <div class="glass-panel">
-              <div class="panel-header"><div class="panel-title">🛡️ Security & Access Control</div></div>
-              <div class="panel-body">${UI.securitySettingsForm(config)}</div>
-            </div>`;
-          setTimeout(() => App.loadBlockedIps(), 50);
         } else if (tab === 'maintenance') {
           const logs = await API.getSystemLogs();
           content.innerHTML = `
@@ -1776,13 +1540,6 @@ const App = {
                 </div>
               </div>
             </div>`;
-        } else if (tab === 'smtp') {
-          const config = await API.getSMTPSettings();
-          content.innerHTML = `
-            <div class="glass-panel">
-              <div class="panel-header"><div class="panel-title">SMTP Mail Configuration</div></div>
-              <div class="panel-body">${UI.smtpSettingsForm(config)}</div>
-            </div>`;
         } else if (tab === 'system') {
           const config = await API.getSystemSettings();
           content.innerHTML = `
@@ -1793,36 +1550,20 @@ const App = {
         } else if (tab === 'users') {
           const users = await API.getUsers();
           content.innerHTML = `
-            <div class="glass-panel" style="margin-bottom:20px">
-              <div class="panel-header"><div class="panel-title">Invite User</div></div>
-              <div class="panel-body">
-                <form onsubmit="App.handleInviteUser(event)" style="display:flex;gap:10px">
-                  <input type="email" name="email" required placeholder="Email address to invite" class="form-input" style="max-width:300px">
-                  <button type="submit" class="btn btn-primary">Send Invite</button>
-                </form>
-              </div>
-            </div>
             <div class="glass-panel">
-              <div class="panel-header"><div class="panel-title">User Management</div></div>
+              <div class="panel-header"><div class="panel-title">People with access</div></div>
               <div class="panel-body">
+                <p style="color:var(--text-muted);font-size:.85rem;margin-bottom:16px">
+                  Accounts and access levels are managed in ${this.currentUser?.identity_provider || 'OpenPrintHQ'}.
+                  This list mirrors the people who have opened this library.
+                </p>
                 <table style="width:100%;border-collapse:collapse;font-size:.9rem">
-                  <thead><tr style="text-align:left;color:var(--text-muted);border-bottom:1px solid var(--border)"><th style="padding:12px">ID</th><th style="padding:12px">Username</th><th style="padding:12px">Email</th><th style="padding:12px">Role</th><th style="padding:12px">Actions</th></tr></thead>
+                  <thead><tr style="text-align:left;color:var(--text-muted);border-bottom:1px solid var(--border)"><th style="padding:12px">Username</th><th style="padding:12px">Email</th><th style="padding:12px">Role</th></tr></thead>
                   <tbody>${users.map(u => `
                     <tr style="border-bottom:1px solid var(--border);color:var(--text-secondary)">
-                      <td style="padding:12px">${u.id}</td>
                       <td style="padding:12px;font-weight:600">${u.username}</td>
                       <td style="padding:12px">${u.email || '-'}</td>
-                      <td style="padding:12px">
-                        <select class="form-input" style="padding:4px 8px;font-size:.85rem;width:auto;display:inline-block" onchange="App.changeUserRole(${u.id}, this)" ${u.id === 1 ? 'disabled' : ''}>
-                          <option value="admin" ${u.role === 'admin' ? 'selected' : ''}>Admin</option>
-                          <option value="uploader" ${u.role === 'uploader' ? 'selected' : ''}>Uploader</option>
-                          <option value="viewer" ${u.role === 'viewer' ? 'selected' : ''}>Viewer</option>
-                        </select>
-                        ${u.id === 1 ? '<div style="font-size:0.7rem;color:var(--text-muted);margin-top:4px">Master Admin</div>' : ''}
-                      </td>
-                      <td style="padding:12px">
-                        ${u.id !== 1 ? `<button class="btn btn-danger btn-sm" onclick="App.deleteUser(${u.id})">🗑 Delete</button>` : ''}
-                      </td>
+                      <td style="padding:12px">${u.role}</td>
                     </tr>`).join('')}</tbody>
                 </table>
               </div>
@@ -2247,44 +1988,7 @@ const App = {
     if (activeTab) activeTab.click();
   },
 
-  async loadBlockedIps() {
-    const el = document.getElementById('blocked-ips-list');
-    if (!el) return;
-    el.innerHTML = '<div style="color:var(--text-muted);font-size:.85rem">Loading blocked IPs...</div>';
-    try {
-      const ips = await API.getBlockedIps();
-      if (!ips || ips.length === 0) {
-        el.innerHTML = '<div style="color:var(--text-muted);font-size:.85rem;padding:8px 0">No IP addresses are currently blocked.</div>';
-        return;
-      }
-      el.innerHTML = `
-        <table class="table" style="width:100%;font-size:.85rem">
-          <thead><tr><th>IP Address</th><th>Failed Attempts</th><th>Blocked At</th><th>Action</th></tr></thead>
-          <tbody>
-            ${ips.map(item => `
-              <tr>
-                <td><strong>${item.ip}</strong></td>
-                <td>${item.attempts}</td>
-                <td>${UI.formatDate(item.blockedAt)}</td>
-                <td><button type="button" class="btn btn-danger btn-xs" onclick="App.unblockIp('${item.ip}')">Unblock</button></td>
-              </tr>
-            `).join('')}
-          </tbody>
-        </table>`;
-    } catch (e) {
-      el.innerHTML = `<div style="color:var(--error);font-size:.85rem">${e.message || 'Failed to fetch blocked IPs'}</div>`;
-    }
-  },
 
-  async unblockIp(ip) {
-    try {
-      await API.unblockIp(ip);
-      this.toast(`Unblocked IP ${ip}`);
-      this.loadBlockedIps();
-    } catch (e) {
-      this.toast(e.message, 'error');
-    }
-  },
 
   async scanForDuplicates() {
     const el = document.getElementById('duplicates-results');

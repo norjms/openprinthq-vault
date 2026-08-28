@@ -1105,82 +1105,9 @@ const UI = {
       </div>`).join('');
   },
 
-  loginForm(allowRegistration = false) {
-    return `
-      <form onsubmit="App.handleLogin(event)" class="form-grid">
-        <div class="form-group">
-          <label>Username</label>
-          <input type="text" name="username" required placeholder="Enter username" class="form-input">
-        </div>
-        <div class="form-group">
-          <label>Password</label>
-          <input type="password" name="password" required placeholder="Enter password" class="form-input">
-        </div>
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-top:20px">
-          <div style="display:flex; flex-direction:column; gap:4px">
-            ${allowRegistration ? `<a href="#" onclick="event.preventDefault();App.showRegister()" style="font-size:.85rem;color:var(--accent-cyan)">No account? Register</a>` : ''}
-            <a href="#" onclick="event.preventDefault();App.showForgotPassword()" style="font-size:.75rem;color:var(--text-muted)">Forgot password?</a>
-          </div>
-          <button type="submit" class="btn btn-primary">Login</button>
-        </div>
-      </form>`;
-  },
 
-  registerForm(token = '') {
-    return `
-      <form onsubmit="App.handleRegister(event)" class="form-grid">
-        <input type="hidden" name="token" value="${token}">
-        <div class="form-group">
-          <label>Username</label>
-          <input type="text" name="username" required placeholder="Choose username" class="form-input">
-        </div>
-        <div class="form-group">
-          <label>Email</label>
-          <input type="email" name="email" required placeholder="Your email address" class="form-input">
-        </div>
-        <div class="form-group">
-          <label>Password</label>
-          <input type="password" name="password" required placeholder="Choose password" class="form-input">
-        </div>
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-top:20px">
-          <a href="#" onclick="event.preventDefault();App.showLogin()" style="font-size:.85rem;color:var(--accent-cyan)">Already have an account? Login</a>
-          <button type="submit" class="btn btn-primary">Register</button>
-        </div>
-      </form>`;
-  },
 
-  forgotPasswordForm() {
-    return `
-      <form onsubmit="App.handleForgotPassword(event)" class="form-grid">
-        <p style="color:var(--text-secondary);font-size:.85rem;margin-bottom:16px">Enter your email and we'll send you a reset link.</p>
-        <div class="form-group">
-          <label>Email</label>
-          <input type="email" name="email" required placeholder="Your email address" class="form-input">
-        </div>
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-top:20px">
-          <a href="#" onclick="event.preventDefault();App.showLogin()" style="font-size:.85rem;color:var(--accent-cyan)">Back to Login</a>
-          <button type="submit" class="btn btn-primary">Send Link</button>
-        </div>
-      </form>`;
-  },
 
-  resetPasswordForm(token) {
-    return `
-      <form onsubmit="App.handleResetPassword(event)" class="form-grid">
-        <input type="hidden" name="token" value="${token}">
-        <div class="form-group">
-          <label>New Password</label>
-          <input type="password" name="password" required placeholder="Enter new password" class="form-input">
-        </div>
-        <div class="form-group">
-          <label>Confirm Password</label>
-          <input type="password" name="confirm" required placeholder="Confirm new password" class="form-input">
-        </div>
-        <div style="display:flex;justify-content:flex-end;margin-top:20px">
-          <button type="submit" class="btn btn-primary">Reset Password</button>
-        </div>
-      </form>`;
-  },
 
   printersSettingsForm(printers = []) {
     const list = printers.map(p => `
@@ -1257,45 +1184,6 @@ const UI = {
       </form>`;
   },
 
-  securitySettingsForm(config = {}) {
-    return `
-      <form onsubmit="App.handleSaveSystemSettings(event)" style="display:flex;flex-direction:column;gap:20px">
-        <div style="display:flex;flex-direction:column;gap:14px">
-          <label class="toggle-item">
-            <div>
-              <div style="font-weight:600;font-size:0.95rem;color:var(--text-primary)">Enable Open Registration</div>
-              <div style="font-size:0.75rem;color:var(--text-muted);margin-top:2px">Allows anyone to register an account without needing an invite code.</div>
-            </div>
-            <input type="checkbox" name="open_registration" value="true" ${config.open_registration === 'true' ? 'checked' : ''}>
-            <span class="toggle-switch"></span>
-          </label>
-
-          <label class="toggle-item">
-            <div>
-              <div style="font-weight:600;font-size:0.95rem;color:var(--text-primary)">Private Instance Mode</div>
-              <div style="font-size:0.75rem;color:var(--text-muted);margin-top:2px">Forces all guests to log in before viewing any models or library files.</div>
-            </div>
-            <input type="checkbox" name="require_login_to_view" value="true" ${config.require_login_to_view === 'true' ? 'checked' : ''}>
-            <span class="toggle-switch"></span>
-          </label>
-        </div>
-
-        <div>
-          <button type="submit" class="btn btn-primary">Save Security Settings</button>
-        </div>
-      </form>
-
-      <div style="margin-top:32px; border-top:1px solid var(--border); padding-top:20px">
-        <h3 style="margin-bottom:12px; font-size:1.1rem; color:var(--text-primary); display:flex; align-items:center; gap:8px">🛡️ Blocked IP Addresses</h3>
-        <div id="blocked-ips-container">
-          <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px;">
-            <button type="button" class="btn btn-secondary btn-sm" onclick="App.loadBlockedIps()">Refresh Blocked IPs</button>
-            <span style="font-size:0.75rem;color:var(--text-muted)">Unblock IP addresses flagged for failed login attempts.</span>
-          </div>
-          <div id="blocked-ips-list"></div>
-        </div>
-      </div>`;
-  },
 
   maintenanceSettingsForm() {
     return `
@@ -1309,42 +1197,6 @@ const UI = {
       </div>`;
   },
 
-  smtpSettingsForm(config = {}) {
-    return `
-      <form onsubmit="App.handleSaveSMTP(event)" class="form-grid">
-        <div class="form-group">
-          <label>SMTP Host</label>
-          <input type="text" name="smtp_host" value="${config.smtp_host || ''}" placeholder="smtp.gmail.com" class="form-input">
-        </div>
-        <div class="form-group">
-          <label>SMTP Port</label>
-          <input type="number" name="smtp_port" value="${config.smtp_port || 587}" class="form-input">
-        </div>
-        <div class="form-group">
-          <label>SMTP User</label>
-          <input type="text" name="smtp_user" value="${config.smtp_user || ''}" class="form-input">
-        </div>
-        <div class="form-group">
-          <label>SMTP Password</label>
-          <input type="password" name="smtp_pass" value="${config.smtp_pass || ''}" class="form-input">
-        </div>
-        <div class="form-group">
-          <label>From Email</label>
-          <input type="text" name="smtp_from" value="${config.smtp_from || ''}" placeholder="GyroidVault <noreply@example.com>" class="form-input">
-        </div>
-        <div class="form-group">
-          <label>Secure (SSL/TLS)</label>
-          <select name="smtp_secure" class="form-input">
-            <option value="false" ${config.smtp_secure === 'false' ? 'selected' : ''}>STARTTLS (Port 587)</option>
-            <option value="true" ${config.smtp_secure === 'true' ? 'selected' : ''}>SSL (Port 465)</option>
-          </select>
-        </div>
-        <div style="margin-top:20px; display:flex; gap:10px;">
-          <button type="submit" class="btn btn-primary">Save SMTP Settings</button>
-          <button type="button" class="btn btn-secondary" onclick="App.testSMTP(event)">Send Test Email</button>
-        </div>
-      </form>`;
-  },
 
   profilePage(user) {
     return `
@@ -1452,22 +1304,6 @@ const UI = {
       </form>`;
   },
 
-  smtpTestModal(defaultEmail = '') {
-    return `
-      <form onsubmit="App.handleSendTestEmail(event)" class="form-grid">
-        <p style="font-size: 0.9rem; color: var(--text-secondary); margin-bottom: 16px;">
-          Enter the email address where you would like to receive the test message.
-        </p>
-        <div class="form-group">
-          <label>Recipient Email</label>
-          <input type="email" name="test_email" value="${defaultEmail}" required placeholder="e.g. you@example.com" class="form-input">
-        </div>
-        <div style="margin-top:20px; display:flex; justify-content:flex-end; gap:10px;">
-          <button type="button" class="btn btn-secondary" onclick="App.closeModal()">Cancel</button>
-          <button type="submit" class="btn btn-primary" id="send-test-btn">Send Test</button>
-        </div>
-      </form>`;
-  },
 
   shareModal(modelId) {
     return `

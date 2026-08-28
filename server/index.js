@@ -4,13 +4,9 @@ const path = require('path');
 const fs = require('fs');
 const { initDatabase, all, get, run, UPLOADS_DIR } = require('./database');
 const { upload, getFileType, setUploadsDir } = require('./middleware/upload');
-const bcrypt = require('bcryptjs');
-const jwt = require('jsonwebtoken');
-const { authenticate, SECRET } = require('./middleware/auth');
+const { authenticate, requireAdmin, warnIfUnsigned } = require('./middleware/auth');
 const helmet = require('helmet');
 const cors = require('cors');
-const cookieParser = require('cookie-parser');
-const rateLimit = require('express-rate-limit');
 const crypto = require('crypto');
 
 const app = express();
@@ -83,221 +79,54 @@ function getSettingBool(key, defaultValue = false) {
 
 app.use(helmet({ contentSecurityPolicy: false }));
 app.use(cors());
-app.use(cookieParser());
 app.use(express.json());
 
+/*
+ * Everything under /api needs an identity.
+ *
+ * Upstream gated writes and left most reads open, which put a tenant's files
+ * one guessed id away from anyone who could reach the port. Reads are gated
+ * here instead of route by route, so a route added later is closed by default
+ * rather than open by oversight. /api/health is the only exception, because a
+ * container healthcheck runs before any edge is in front of it.
+ */
 app.use('/api', (req, res, next) => {
-  if (req.path.startsWith('/auth/') || req.path === '/system/public-config') {
-    return next();
-  }
-  if (getSettingBool('require_login_to_view')) {
-    const token = req.cookies.pv_token;
-    if (!token) return res.status(401).json({ error: 'Private instance - login required' });
-    try {
-      jwt.verify(token, SECRET);
-    } catch(e) {
-      return res.status(401).json({ error: 'Private instance - invalid token' });
-    }
-  }
-  next();
+  if (req.path === '/health') return next();
+  return authenticate(req, res, next);
 });
 
-const blockedIPsStore = new Map(); // ip -> { attempts, blockedAt, expiresAt }
-
-function trackFailedLogin(ip) {
-  const now = Date.now();
-  const entry = blockedIPsStore.get(ip) || { attempts: 0, blockedAt: null, expiresAt: null };
-  entry.attempts += 1;
-  if (entry.attempts >= 3) {
-    entry.blockedAt = new Date().toISOString();
-    entry.expiresAt = new Date(now + 15 * 60 * 1000).toISOString();
-  }
-  blockedIPsStore.set(ip, entry);
-}
-
-const loginLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 5,
-  handler: (req, res) => {
-    trackFailedLogin(req.ip || req.connection.remoteAddress);
-    res.status(429).json({ error: 'Too many login attempts from this IP, please try again after 15 minutes' });
-  },
-  validate: { xForwardedForHeader: false }
-});
+app.get('/api/health', (req, res) => res.json({ ok: true }));
 
 // ─── AUTH ───────────────────────────────────────────────────────────────────
 
-app.post('/api/auth/register', async (req, res) => {
-  try {
-    const { username, password, email, invite_token } = req.body;
-    if (!username || !password || !email) return res.status(400).json({ error: 'Missing fields' });
-    if (password.length < 8 || !/[a-zA-Z]/.test(password) || !/[0-9]/.test(password)) {
-      return res.status(400).json({ error: 'Password must be at least 8 characters long and contain both letters and numbers' });
-    }
-    
-    const userCount = get('SELECT COUNT(*) as count FROM users').count;
-    let role = 'user';
 
-    // If there are existing users, require a valid invite token
-    if (userCount > 0) {
-      if (!getSettingBool('open_registration')) {
-        if (!invite_token) return res.status(403).json({ error: 'Registration requires an invite token' });
-        const invite = get("SELECT * FROM user_invites WHERE token=? AND expires_at > datetime('now')", [invite_token]);
-        if (!invite) return res.status(400).json({ error: 'Invalid or expired invite token' });
-        if (invite.email.toLowerCase() !== email.toLowerCase()) {
-          return res.status(400).json({ error: 'Email does not match the invitation' });
-        }
-      }
-    } else {
-      role = 'admin';
-    }
-    
-    const hash = await bcrypt.hash(password, 10);
-    const r = run('INSERT INTO users (username, email, password_hash, role) VALUES (?, ?, ?, ?)', [username, email, hash, role]);
-    
-    if (invite_token) {
-      run('DELETE FROM user_invites WHERE token=?', [invite_token]);
-    }
 
-    res.status(201).json({ id: r.lastId, username, email, role });
-  } catch (e) { 
-    if (e.message.includes('UNIQUE')) return res.status(400).json({ error: 'Username or Email taken' });
-    console.error(e); res.status(500).json({ error: 'Registration failed' }); 
-  }
-});
 
-app.post('/api/auth/invite', authenticate, async (req, res) => {
-  if (req.user.role !== 'admin') return res.status(403).json({ error: 'Forbidden' });
-  try {
-    const { email } = req.body;
-    if (!email) return res.status(400).json({ error: 'Email is required' });
-    
-    // Check if user exists
-    const existing = get('SELECT id FROM users WHERE email=?', [email]);
-    if (existing) return res.status(400).json({ error: 'User already exists' });
 
-    const token = require('crypto').randomBytes(20).toString('hex');
-    run("INSERT OR REPLACE INTO user_invites (token, email, expires_at) VALUES (?, ?, datetime('now', '+7 days'))", [token, email]);
-    
-    const { sendInviteEmail } = require('./utils/email');
-    await sendInviteEmail(email, token, req.headers.origin || `http://${req.headers.host}`);
-    
-    res.json({ message: 'Invitation sent' });
-  } catch (e) {
-    console.error(e);
-    res.status(500).json({ error: e.message || 'Failed to send invitation' });
-  }
-});
-
-app.post('/api/auth/login', loginLimiter, async (req, res) => {
-  try {
-    const { username, password } = req.body;
-    const user = get('SELECT * FROM users WHERE username = ?', [username]);
-    if (!user || !(await bcrypt.compare(password, user.password_hash))) {
-      return res.status(401).json({ error: 'Invalid credentials' });
-    }
-    
-    const csrfToken = crypto.randomBytes(32).toString('hex');
-    const token = jwt.sign({ id: user.id, role: user.role, csrfToken }, SECRET, { expiresIn: '30d' });
-    
-    res.cookie('pv_token', token, { 
-      httpOnly: true, 
-      secure: req.secure || req.headers['x-forwarded-proto'] === 'https', 
-      sameSite: 'strict', 
-      maxAge: 30 * 24 * 60 * 60 * 1000 
-    });
-    
-    res.json({ csrfToken, user: { id: user.id, username: user.username, role: user.role, email: user.email } });
-  } catch (e) { console.error(e); res.status(500).json({ error: 'Login failed' }); }
-});
-
-app.post('/api/auth/logout', (req, res) => {
-  res.clearCookie('pv_token');
-  res.json({ message: 'Logged out' });
-});
-
-app.get('/api/system/public-config', (req, res) => {
-  const userCount = get('SELECT COUNT(*) as count FROM users').count;
-  res.json({
-    open_registration: getSettingBool('open_registration') || userCount === 0,
-    require_login_to_view: getSettingBool('require_login_to_view')
-  });
-});
 
 app.get('/api/auth/me', authenticate, (req, res) => {
   const user = get('SELECT id, username, email, role, preferred_slicer FROM users WHERE id=?', [req.user.id]);
-  if (user) user.csrfToken = req.user.csrfToken;
+  if (user) {
+    // The session is not this application's to end, so the client is told
+    // where the real one lives instead of being given a logout button that
+    // would clear nothing.
+    user.logout_url = process.env.OPHQ_LOGOUT_URL || '';
+    user.identity_provider = process.env.OPHQ_IDP_NAME || 'OpenPrintHQ';
+  }
   res.json(user);
 });
 
-app.put('/api/auth/profile', authenticate, async (req, res) => {
+app.put('/api/auth/profile', authenticate, (req, res) => {
   try {
-    const { username, email, password, preferred_slicer } = req.body;
-    const updates = [], params = [];
-    if (username) { updates.push('username=?'); params.push(username); }
-    if (email) { updates.push('email=?'); params.push(email); }
-    if (preferred_slicer !== undefined) { updates.push('preferred_slicer=?'); params.push(preferred_slicer); }
-    if (password) { 
-      if (password.length < 8 || !/[a-zA-Z]/.test(password) || !/[0-9]/.test(password)) {
-        return res.status(400).json({ error: 'Password must be at least 8 characters long and contain both letters and numbers' });
-      }
-      const hash = await bcrypt.hash(password, 10);
-      updates.push('password_hash=?'); params.push(hash);
-    }
-    if (!updates.length) return res.status(400).json({ error: 'Nothing to update' });
-    params.push(req.user.id);
-    run(`UPDATE users SET ${updates.join(',')} WHERE id=?`, params);
+    const { preferred_slicer } = req.body;
+    if (preferred_slicer === undefined) return res.status(400).json({ error: 'Nothing to update' });
+    run('UPDATE users SET preferred_slicer=? WHERE id=?', [preferred_slicer, req.user.id]);
     res.json({ success: true });
-  } catch (e) { 
-    if (e.message.includes('UNIQUE')) return res.status(400).json({ error: 'Username or Email taken' });
-    console.error(e); res.status(500).json({ error: 'Profile update failed' }); 
-  }
+  } catch (e) { console.error(e); res.status(500).json({ error: 'Profile update failed' }); }
 });
 
-app.post('/api/auth/api-key', authenticate, (req, res) => {
-  try {
-    const token = jwt.sign(
-      { id: req.user.id, username: req.user.username, role: req.user.role },
-      SECRET
-      // No expiration for API tokens (or set a very long one like 10y)
-    );
-    res.json({ api_key: token });
-  } catch (e) {
-    console.error(e);
-    res.status(500).json({ error: 'Failed to generate API Key' });
-  }
-});
 
-app.post('/api/auth/forgot-password', async (req, res) => {
-  try {
-    const { email } = req.body;
-    const user = get('SELECT * FROM users WHERE email=?', [email]);
-    if (!user) return res.json({ message: 'If that email exists, we sent a reset link' });
-    
-    const token = require('crypto').randomBytes(20).toString('hex');
-    run("UPDATE users SET password_reset_token=?, password_reset_expires=datetime('now', '+1 hour') WHERE id=?", [token, user.id]);
-    
-    const { sendResetEmail } = require('./utils/email');
-    await sendResetEmail(email, token, req.headers.origin || `http://${req.headers.host}`);
-    res.json({ message: 'Reset email sent' });
-  } catch (e) { console.error(e); res.status(500).json({ error: 'Failed to send reset email' }); }
-});
 
-app.post('/api/auth/reset-password', async (req, res) => {
-  try {
-    const { token, password } = req.body;
-    if (!password) return res.status(400).json({ error: 'Password is required' });
-    if (password.length < 8 || !/[a-zA-Z]/.test(password) || !/[0-9]/.test(password)) {
-      return res.status(400).json({ error: 'Password must be at least 8 characters long and contain both letters and numbers' });
-    }
-    const user = get("SELECT * FROM users WHERE password_reset_token=? AND password_reset_expires > datetime('now')", [token]);
-    if (!user) return res.status(400).json({ error: 'Token invalid or expired' });
-    
-    const hash = await bcrypt.hash(password, 10);
-    run("UPDATE users SET password_hash=?, password_reset_token=NULL, password_reset_expires=NULL WHERE id=?", [hash, user.id]);
-    res.json({ message: 'Password reset successful' });
-  } catch (e) { console.error(e); res.status(500).json({ error: 'Failed to reset password' }); }
-});
 
 function getFileUrl(file) {
   if (file.library_path) {
@@ -328,9 +157,9 @@ function getThumbUrl(thumbnail, folderPath = null) {
 
 app.use(express.json());
 app.use(express.static(path.join(__dirname, '..', 'public')));
-app.use('/uploads', express.static(UPLOADS_DIR));
+app.use('/uploads', authenticate, express.static(UPLOADS_DIR));
 if (fs.existsSync(LIBRARY_PATH)) {
-  app.use('/library-files', express.static(LIBRARY_PATH));
+  app.use('/library-files', authenticate, express.static(LIBRARY_PATH));
 }
 
 // ─── MODELS ───────────────────────────────────────────────────────────
@@ -1023,6 +852,9 @@ app.post('/api/shares', authenticate, (req, res) => {
 });
 
 app.get('/api/shares/:slug', (req, res) => {
+  if (process.env.OPHQ_PUBLIC_SHARES !== '1') {
+    return res.status(404).json({ error: 'Public sharing is disabled on this instance' });
+  }
   try {
     const share = get("SELECT * FROM shares WHERE id=? AND (expires_at IS NULL OR expires_at > datetime('now'))", [req.params.slug]);
     if (!share) return res.status(404).json({ error: 'Share not found or expired' });
@@ -1670,25 +1502,7 @@ app.get('/api/settings/system', authenticate, (req, res) => {
 
 // ─── IP UNBLOCK & DUPLICATES SYSTEM ─────────────────────────────────────────
 
-app.get('/api/system/blocked-ips', authenticate, (req, res) => {
-  if (req.user.role !== 'admin') return res.status(403).json({ error: 'Forbidden' });
-  const now = Date.now();
-  const list = [];
-  for (const [ip, info] of blockedIPsStore.entries()) {
-    if (info.expiresAt && new Date(info.expiresAt).getTime() > now) {
-      list.push({ ip, attempts: info.attempts, blockedAt: info.blockedAt, expiresAt: info.expiresAt });
-    }
-  }
-  res.json(list);
-});
 
-app.post('/api/system/unblock-ip', authenticate, (req, res) => {
-  if (req.user.role !== 'admin') return res.status(403).json({ error: 'Forbidden' });
-  const { ip } = req.body;
-  if (!ip) return res.status(400).json({ error: 'IP address required' });
-  blockedIPsStore.delete(ip);
-  res.json({ success: true, message: `IP ${ip} unblocked successfully` });
-});
 
 app.get('/api/system/duplicates', authenticate, (req, res) => {
   if (req.user.role !== 'admin') return res.status(403).json({ error: 'Forbidden' });
@@ -1758,38 +1572,8 @@ app.post('/api/settings/system', authenticate, (req, res) => {
   } catch (e) { console.error(e); res.status(500).json({ error: 'Failed to save system settings' }); }
 });
 
-app.get('/api/settings/smtp', authenticate, (req, res) => {
-  if (req.user.role !== 'admin') return res.status(403).json({ error: 'Forbidden' });
-  const settings = all('SELECT * FROM system_settings WHERE key LIKE "smtp_%"');
-  const config = {};
-  settings.forEach(s => config[s.key] = s.value);
-  res.json(config);
-});
 
-app.post('/api/settings/smtp', authenticate, (req, res) => {
-  if (req.user.role !== 'admin') return res.status(403).json({ error: 'Forbidden' });
-  try {
-    const config = req.body;
-    for (const [key, value] of Object.entries(config)) {
-      run('INSERT OR REPLACE INTO system_settings (key, value) VALUES (?, ?)', [key, value]);
-    }
-    res.json({ success: true });
-  } catch (e) { console.error(e); res.status(500).json({ error: 'Failed to save SMTP settings' }); }
-});
 
-app.post('/api/settings/smtp/test', authenticate, async (req, res) => {
-  if (req.user.role !== 'admin') return res.status(403).json({ error: 'Forbidden' });
-  try {
-    const { email } = req.body;
-    if (!email) return res.status(400).json({ error: 'Email is required' });
-    const { sendTestEmail } = require('./utils/email');
-    await sendTestEmail(email);
-    res.json({ success: true });
-  } catch (e) { 
-    console.error(e); 
-    res.status(500).json({ error: e.message || 'Failed to send test email' }); 
-  }
-});
 
 app.get('/api/users', authenticate, (req, res) => {
   if (req.user.role !== 'admin') return res.status(403).json({ error: 'Forbidden' });
@@ -1798,38 +1582,7 @@ app.get('/api/users', authenticate, (req, res) => {
   } catch (e) { console.error(e); res.status(500).json({ error: 'Failed to fetch users' }); }
 });
 
-app.put('/api/users/:id/role', authenticate, (req, res) => {
-  if (req.user.role !== 'admin') return res.status(403).json({ error: 'Forbidden' });
-  const userId = parseInt(req.params.id, 10);
-  const { role } = req.body;
-  
-  if (userId === 1) return res.status(400).json({ error: 'Cannot change the role of the master admin (User ID 1)' });
-  if (!['admin', 'uploader', 'viewer'].includes(role)) return res.status(400).json({ error: 'Invalid role' });
-  
-  try {
-    run('UPDATE users SET role = ? WHERE id = ?', [role, userId]);
-    res.json({ success: true });
-  } catch (e) {
-    console.error(e);
-    res.status(500).json({ error: 'Failed to update user role' });
-  }
-});
 
-app.delete('/api/users/:id', authenticate, (req, res) => {
-  if (req.user.role !== 'admin') return res.status(403).json({ error: 'Forbidden' });
-  const userId = parseInt(req.params.id, 10);
-  
-  if (userId === 1) return res.status(400).json({ error: 'Cannot delete the master admin (User ID 1)' });
-  if (userId === req.user.id) return res.status(400).json({ error: 'Cannot delete yourself' });
-  
-  try {
-    run('DELETE FROM users WHERE id = ?', [userId]);
-    res.json({ success: true });
-  } catch (e) {
-    console.error(e);
-    res.status(500).json({ error: 'Failed to delete user' });
-  }
-});
 
 app.get('/api/stats', (req, res) => {
   try {
@@ -1899,6 +1652,7 @@ function setupBackgroundScanner() {
 
 (async () => {
   await initDatabase();
+  warnIfUnsigned();
   setUploadsDir(UPLOADS_DIR);
 
   // Graceful shutdown to save DB before process exit

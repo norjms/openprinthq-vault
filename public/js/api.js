@@ -1,13 +1,10 @@
 /* ─── API Client ──────────────────────────────────────────────────────── */
 const API = {
   async request(url, options = {}) {
-    const csrfToken = localStorage.getItem('pv_csrf_token');
-    // Don't even try profile calls if no token is present
-    if (url.startsWith('/api/auth/') && !['login', 'register', 'forgot-password', 'reset-password', 'logout'].some(p => url.includes(p)) && !csrfToken) {
-      return null;
-    }
+    // No credential is attached here. The edge authenticates the request
+    // before it arrives, so there is no token to hold and no CSRF token to
+    // echo: there is no ambient cookie an attacking page could ride.
     const headers = { 'Content-Type': 'application/json', ...options.headers };
-    if (csrfToken) headers['X-CSRF-Token'] = csrfToken;
 
     const res = await fetch(url, {
       credentials: 'same-origin',
@@ -15,10 +12,9 @@ const API = {
       ...options,
     });
     if (res.status === 401) {
-      if (url.includes('/api/auth/login')) {
-        const err = await res.json().catch(() => ({ error: 'Invalid credentials' }));
-        throw new Error(err.error || 'Invalid credentials');
-      }
+      // The edge session has expired. Reloading sends the browser back through
+      // it, which is the only thing that can put the session back.
+      window.location.reload();
       return null;
     }
     if (!res.ok) {
@@ -29,39 +25,15 @@ const API = {
   },
 
   // Auth
-  login(username, password) {
-    return this.request('/api/auth/login', { method: 'POST', body: JSON.stringify({ username, password }) });
-  },
-  logout() {
-    return this.request('/api/auth/logout', { method: 'POST' });
-  },
-  register(username, email, password, token = null) {
-    return this.request('/api/auth/register', { method: 'POST', body: JSON.stringify({ username, email, password, invite_token: token }) });
-  },
   getMe() { return this.request('/api/auth/me'); },
   updateProfile(data) {
     return this.request('/api/auth/profile', { method: 'PUT', body: JSON.stringify(data) });
   },
-  generateApiKey() {
-    return this.request('/api/auth/api-key', { method: 'POST' });
-  },
-  forgotPassword(email) {
-    return this.request('/api/auth/forgot-password', { method: 'POST', body: JSON.stringify({ email }) });
-  },
-  resetPassword(token, password) {
-    return this.request('/api/auth/reset-password', { method: 'POST', body: JSON.stringify({ token, password }) });
-  },
   getUsers() { return this.request('/api/users'); },
-  updateUserRole(userId, role) { return this.request(`/api/users/${userId}/role`, { method: 'PUT', body: JSON.stringify({ role }) }); },
-  deleteUser(userId) { return this.request(`/api/users/${userId}`, { method: 'DELETE' }); },
-  inviteUser(email) { return this.request('/api/auth/invite', { method: 'POST', body: JSON.stringify({ email }) }); },
 
   // Settings
   getSystemSettings() { return this.request('/api/settings/system'); },
   saveSystemSettings(data) { return this.request('/api/settings/system', { method: 'POST', body: JSON.stringify(data) }); },
-  getSMTPSettings() { return this.request('/api/settings/smtp'); },
-  saveSMTPSettings(data) { return this.request('/api/settings/smtp', { method: 'POST', body: JSON.stringify(data) }); },
-  testSMTP(data) { return this.request('/api/settings/smtp/test', { method: 'POST', body: JSON.stringify(data) }); },
   getViewMode() { return this.request('/api/settings/view-mode'); },
 
   // Library browser
@@ -119,9 +91,6 @@ const API = {
       xhr.open('POST', `/api/models/${modelId}/files`);
       xhr.withCredentials = true;
 
-      const csrfToken = localStorage.getItem('pv_csrf_token');
-      if (csrfToken) xhr.setRequestHeader('X-CSRF-Token', csrfToken);
-
       const startTime = Date.now();
       if (xhr.upload && typeof onProgress === 'function') {
         xhr.upload.onprogress = (e) => {
@@ -167,10 +136,7 @@ const API = {
   async uploadThumbnail(modelId, file) {
     const form = new FormData();
     form.append('thumbnail', file);
-    const csrfToken = localStorage.getItem('pv_csrf_token');
-    const headers = {};
-    if (csrfToken) headers['X-CSRF-Token'] = csrfToken;
-    const res = await fetch(`/api/models/${modelId}/thumbnail`, { method: 'POST', body: form, headers, credentials: 'same-origin' });
+    const res = await fetch(`/api/models/${modelId}/thumbnail`, { method: 'POST', body: form, credentials: 'same-origin' });
     if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.error || 'Upload failed'); }
     return res.json();
   },
@@ -226,8 +192,5 @@ const API = {
   getUpdateStatus() { return this.request('/api/system/updates'); },
   getSystemLogs() { return this.request('/api/system/logs'); },
   clearSystemLogs() { return this.request('/api/system/logs', { method: 'DELETE' }); },
-  getPublicConfig() { return this.request('/api/system/public-config'); },
-  getBlockedIps() { return this.request('/api/system/blocked-ips'); },
-  unblockIp(ip) { return this.request('/api/system/unblock-ip', { method: 'POST', body: JSON.stringify({ ip }) }); },
   scanDuplicates() { return this.request('/api/system/duplicates'); }
 };

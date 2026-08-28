@@ -1,3 +1,20 @@
+# OpenPrintHQ Vault
+
+A fork of [GyroidVault](https://github.com/TeeCodeDev/GyroidVault) by TeeCodeDev,
+the model library behind the Files section of OpenPrintHQ. AGPL-3.0, as upstream
+is, and upstream history is preserved so changes can be merged in both
+directions.
+
+**What differs from upstream:** this fork does not authenticate anyone. Identity
+comes from Authentik through OpenPrintHQ, every API route and every file served
+requires it, and the login, registration, invite, password-reset and API-key
+machinery is gone. See [docs/authentication.md](docs/authentication.md).
+
+Everything below is upstream's README, kept for reference on how the library
+itself works.
+
+---
+
 # GyroidVault
 
 **GyroidVault** is a self-hosted 3D model library and print manager. It helps you organize your STL, 3MF, and Gcode files, keep track of your print history, and group files into project collections.
