@@ -40,6 +40,7 @@ different username, and it expires with the timestamp window.
 | `OPHQ_DEFAULT_ROLE` | `uploader` | Role for anyone in neither list. |
 | `OPHQ_LOGOUT_URL` | unset | Where the account menu sends someone to end their session. Empty hides the link. |
 | `OPHQ_IDP_NAME` | `OpenPrintHQ` | Name shown wherever the UI points at the identity provider. |
+| `OPHQ_SERVICE_USER` | `openprinthq-control` | The control-plane's own identity. Excluded from account adoption below. |
 | `OPHQ_PUBLIC_SHARES` | unset | `1` re-enables the unauthenticated share-link endpoint. |
 
 ## Roles
@@ -48,6 +49,20 @@ Roles are derived from group membership on every request, so a change in
 Authentik takes effect on the next page load. The consequence worth knowing:
 the local `users.role` column is a cache, not an authority, and editing it does
 nothing. The user-management screen is therefore a read-only mirror.
+
+## Adopting the pre-SSO account
+
+Libraries created before this fork have one password-era account, invented by
+the control-plane so it could reach the library at all, and everything in the
+library is owned by it. Ownership matters: editing or deleting a model requires
+being its owner or an admin, so a tenant arriving as a fresh row would find
+their own library read-only in practice.
+
+The first real person to appear at a library holding exactly one password-era
+account takes that account over. The conditions are narrow on purpose: exactly
+one such row, and never the service identity. A library with two password-era
+accounts was not created by this arrangement, and guessing which to adopt would
+be worse than adding a row. Adoption is logged.
 
 ## What else changed as a result
 

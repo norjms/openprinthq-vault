@@ -1038,7 +1038,8 @@ const App = {
                 <div class="form-group">
                   <label class="form-label">App Theme</label>
                   <select id="theme-selector" class="form-select" onchange="App.previewTheme()">
-                    <option value="glass" ${localStorage.getItem('gv_theme') === 'glass' || !localStorage.getItem('gv_theme') ? 'selected' : ''}>Glass (Default)</option>
+                    <option value="openprinthq" ${localStorage.getItem('gv_theme') === 'openprinthq' || !localStorage.getItem('gv_theme') ? 'selected' : ''}>OpenPrintHQ (Default)</option>
+                    <option value="glass" ${localStorage.getItem('gv_theme') === 'glass' ? 'selected' : ''}>Glass</option>
                     <option value="industrial" ${localStorage.getItem('gv_theme') === 'industrial' ? 'selected' : ''}>Industrial</option>
                   </select>
                 </div>

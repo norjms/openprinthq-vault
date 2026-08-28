@@ -28,7 +28,7 @@
  */
 
 const crypto = require('crypto');
-const { get, run } = require('../database');
+const { all, get, run } = require('../database');
 
 const SECRET = process.env.OPHQ_AUTH_SECRET || '';
 const MAX_SKEW_SECONDS = Number(process.env.OPHQ_AUTH_MAX_SKEW || 300);
@@ -39,6 +39,11 @@ const VIEWER_GROUPS = splitList(process.env.OPHQ_VIEWER_GROUPS || 'vault-viewers
 // is per tenant, so the common case is a single person who owns everything in
 // it, and defaulting that person to read-only would be wrong.
 const DEFAULT_ROLE = process.env.OPHQ_DEFAULT_ROLE || 'uploader';
+// The control-plane's own identity, used for the calls it makes on nobody's
+// behalf: seeding the print host, triggering a scan. It is excluded from the
+// adoption rule below, because adopting a tenant's library into a service
+// account is the one outcome that rule must never produce.
+const SERVICE_USER = process.env.OPHQ_SERVICE_USER || 'openprinthq-control';
 
 function splitList(v) {
   return String(v).split(',').map((s) => s.trim()).filter(Boolean);
@@ -110,6 +115,8 @@ function resolveUser(id) {
   let row = get('SELECT * FROM users WHERE username = ?', [id.username]);
   if (!row && id.email) row = get('SELECT * FROM users WHERE email = ?', [id.email]);
 
+  if (!row) row = adoptLegacyRow(id);
+
   if (!row) {
     const r = run(
       'INSERT INTO users (username, email, password_hash, role) VALUES (?, ?, ?, ?)',
@@ -129,6 +136,36 @@ function resolveUser(id) {
     ]);
   }
   return { id: row.id, username: id.username, email: id.email || row.email, role, preferred_slicer: row.preferred_slicer };
+}
+
+/**
+ * Take over the account this library was created under, once.
+ *
+ * Before this fork the control-plane had to invent a local account to reach a
+ * tenant's library, and everything already in the library is owned by it. That
+ * ownership is not decorative: editing or deleting a model requires being its
+ * owner or an admin, so a tenant who arrived as a brand new row would find
+ * their own library read-only in practice.
+ *
+ * So the first real person to appear at a library that has exactly one
+ * password-era account takes that account over, name, address and all. The
+ * conditions are deliberately narrow: one such row, and not the service
+ * identity. A library with two password-era accounts is not one this fork
+ * created, and guessing which one to adopt would be worse than adding a row.
+ */
+function adoptLegacyRow(id) {
+  if (id.username === SERVICE_USER) return null;
+  const legacy = all("SELECT * FROM users WHERE password_hash IS NOT '!sso'");
+  if (legacy.length !== 1) return null;
+  const row = legacy[0];
+  run('UPDATE users SET username = ?, email = ?, password_hash = ? WHERE id = ?', [
+    id.username,
+    id.email || row.email || null,
+    '!sso',
+    row.id
+  ]);
+  console.log(`[auth] adopted the pre-SSO account "${row.username}" as "${id.username}"`);
+  return { ...row, username: id.username, email: id.email || row.email };
 }
 
 function authenticate(req, res, next) {
