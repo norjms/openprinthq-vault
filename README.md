@@ -16,6 +16,11 @@ API through it, so what is left here is the API, the scanner and the file
 serving. Upstream's frontend documentation below therefore describes something
 this fork does not ship.
 
+**Pulling upstream changes in** is a merge, not a port: upstream history and
+SHAs are intact on purpose. The procedure, the four files that conflict every
+time, and the checks to run before building are in
+[docs/upstream-sync.md](docs/upstream-sync.md).
+
 Everything below is upstream's README, kept for reference on how the library
 itself works.
 
