@@ -156,7 +156,12 @@ function getThumbUrl(thumbnail, folderPath = null) {
 }
 
 app.use(express.json());
-app.use(express.static(path.join(__dirname, '..', 'public')));
+// No static frontend. This is an API.
+//
+// Every page this used to serve is now a native OpenPrintHQ route on the app's
+// own origin, so public/ was deleted rather than left to rot: a second, older
+// copy of the same screens, reachable by anything that could reach the
+// container, is a liability and not a fallback.
 app.use('/uploads', authenticate, express.static(UPLOADS_DIR));
 if (fs.existsSync(LIBRARY_PATH)) {
   app.use('/library-files', authenticate, express.static(LIBRARY_PATH));
@@ -1614,9 +1619,12 @@ app.get('/uploads/:filename', (req, res) => {
   }
 });
 
-// ─── SPA Fallback & Error Handler ─────────────────────────────────────────
+// ─── Not Found & Error Handler ─────────────────────────────────────────
 
-app.get('*', (req, res) => { res.sendFile(path.join(__dirname, '..', 'public', 'index.html')); });
+// Was an SPA fallback serving public/index.html. With no frontend here, an
+// unknown path is a mistake by the caller and should say so, rather than
+// answering every typo with 200 and a page.
+app.get('*', (req, res) => { res.status(404).json({ error: 'Not found' }); });
 app.use((err, req, res, next) => { console.error(err); res.status(500).json({ error: 'Internal server error' }); });
 
 // ─── BACKGROUND TASKS ───────────────────────────────────────────────────────

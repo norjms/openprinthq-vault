@@ -10,6 +10,12 @@ comes from Authentik through OpenPrintHQ, every API route and every file served
 requires it, and the login, registration, invite, password-reset and API-key
 machinery is gone. See [docs/authentication.md](docs/authentication.md).
 
+**It also has no frontend.** `public/` is deleted. The library's screens are
+native OpenPrintHQ pages now, served from the app's own origin and calling this
+API through it, so what is left here is the API, the scanner and the file
+serving. Upstream's frontend documentation below therefore describes something
+this fork does not ship.
+
 Everything below is upstream's README, kept for reference on how the library
 itself works.
 
