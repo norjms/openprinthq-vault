@@ -1509,6 +1509,33 @@ app.get('/api/settings/system', authenticate, (req, res) => {
 
 
 
+/**
+ * SHA-256 of a file, read in 1 MB chunks.
+ *
+ * Still synchronous, because the caller is, but bounded: the peak allocation is
+ * the chunk rather than the file. Returns null rather than throwing if the file
+ * disappears mid-scan, which happens routinely when a scan runs while something
+ * else is writing to the bucket.
+ */
+function hashFileSync(filePath) {
+  const CHUNK = 1024 * 1024;
+  let fd;
+  try {
+    fd = fs.openSync(filePath, 'r');
+  } catch { return null; }
+  try {
+    const h = require('crypto').createHash('sha256');
+    const buf = Buffer.allocUnsafe(CHUNK);
+    let read;
+    while ((read = fs.readSync(fd, buf, 0, CHUNK, null)) > 0) h.update(buf.subarray(0, read));
+    return h.digest('hex');
+  } catch {
+    return null;
+  } finally {
+    try { fs.closeSync(fd); } catch { /* already gone */ }
+  }
+}
+
 app.get('/api/system/duplicates', authenticate, (req, res) => {
   if (req.user.role !== 'admin') return res.status(403).json({ error: 'Forbidden' });
   try {
@@ -1535,8 +1562,13 @@ app.get('/api/system/duplicates', authenticate, (req, res) => {
         const filePath = f.library_path || path.join(UPLOADS_DIR, f.filename);
         if (!fs.existsSync(filePath)) continue;
         try {
-          const fileBuffer = fs.readFileSync(filePath);
-          const hash = crypto.createHash('sha256').update(fileBuffer).digest('hex');
+          // Hash in chunks. readFileSync pulled the whole file into memory,
+          // which for a library of 400 MB plates is both an allocation per
+          // candidate and a synchronous read that stalls every other request
+          // for the duration. A duplicate scan is a maintenance action; it
+          // should not be able to take the library down with it.
+          const hash = hashFileSync(filePath);
+          if (!hash) continue;
           if (!hashGroups[hash]) hashGroups[hash] = [];
           hashGroups[hash].push(f);
         } catch (e) {}
