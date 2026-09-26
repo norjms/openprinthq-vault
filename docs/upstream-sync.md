@@ -59,7 +59,20 @@ a password, a token, a session or a CSRF check.
 
 **`package.json` / `package-lock.json`.** We removed the dependencies that went
 with SMTP and the local account system. If upstream adds a dependency for a
-feature we kept, take it; if it is for one we removed, do not.
+feature we kept, take it; if it is for one we removed, do not. Also not taken:
+`express-rate-limit` (its limiters were keyed to login) and `occt-import-js`,
+which upstream only serves as static files to its own browser viewer.
+Regenerate the lock rather than hand-merging it:
+`docker run --rm -v $PWD:/w -w /w node:22-alpine npm install --package-lock-only --ignore-scripts`.
+
+**Code that merges cleanly but still does not belong.** Conflict markers are
+not the whole review. In the v2.1.1 merge these arrived outside any conflict:
+`app.use('/api', apiLimiter)` and `heavyLimiter` on three download routes
+(would crash at boot, `rateLimit` is not imported here), and
+`scripts/seed-demo-data.js` (seeds an account with a fixed password) plus
+`scripts/import-user-models.js` (imports from a path on upstream's machine),
+which `COPY . .` ships in every tenant image. Grep the merged tree, not just
+the conflicts.
 
 **`public/`.** Deleted, along with `server/utils/email.js`. Upstream will keep
 changing files in `public/`, and git will happily recreate them on merge as
@@ -93,7 +106,19 @@ grep -nE "app\.use\('/(uploads|library-files)'" server/index.js
 
 # 4. Unknown paths 404 rather than serving a page.
 grep -n "app.get('\*'" server/index.js
+
+# 5. Nothing from the account system survived outside the conflicts.
+grep -nE "Limiter|rateLimit|jwt\.|bcrypt|req\.cookies|getJwtSecret|smtp|occt" server/index.js
+grep -lE "bcryptjs|jsonwebtoken|nodemailer" -r server scripts && echo "FAIL" || echo "deps: clean"
+
+# 6. Every file parses.
+docker run --rm -v $PWD:/w -w /w node:22-alpine sh -c 'for f in server/*.js server/*/*.js; do node --check $f || echo FAIL $f; done'
 ```
+
+Before rolling out, also open a database written by the image prod is running
+now with the new image (seed through the API, `docker stop`, start the new
+image on the same data dir). The schema migrates in place on start, and this
+is the only check that proves it does so for a real tenant's data.
 
 Then, against a running container:
 
@@ -137,7 +162,8 @@ rewrite over our own commits only, and never over upstream's.
 ## When to check
 
 Upstream tags releases (`v1.4.0`, `v1.5.0`, ...), so `git fetch upstream --tags`
-followed by `git tag -l` is the quickest look. We forked at `v1.5.0` (`e35a3f7`).
+followed by `git tag -l` is the quickest look. We forked at `v1.5.0` (`e35a3f7`)
+and last merged `v2.1.1` (`f7b139d`, merge `5600bfd`, 2026-09-25).
 
 Checking is cheap and skipping it is how a fork drifts far enough that merging
 stops being possible, which is the failure this document exists to prevent.
